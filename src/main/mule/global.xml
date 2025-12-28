@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:db="http://www.mulesoft.org/schema/mule/db"
+	xmlns:sap="http://www.mulesoft.org/schema/mule/sap"
+	xmlns:os="http://www.mulesoft.org/schema/mule/os"
+	xmlns:secure-properties="http://www.mulesoft.org/schema/mule/secure-properties"
+	xsi:schemaLocation="
+		http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+		http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+		http://www.mulesoft.org/schema/mule/sap http://www.mulesoft.org/schema/mule/sap/current/mule-sap.xsd
+		http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+		http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/schema/mule/secure-properties/current/mule-secure-properties.xsd">
+
+	<!-- Global Properties -->
+	<global-property name="mule.env" value="dev" doc:name="Environment Property"/>
+	<global-property name="encryption.key" value="${encryption.key}" doc:name="Encryption Key"/>
+
+	<!-- Secure Properties Configuration -->
+	<secure-properties:config name="Secure_Properties_Config" 
+		doc:name="Secure Properties Config" 
+		file="application-secure.yaml" 
+		key="${encryption.key}">
+		<secure-properties:encrypt algorithm="AES" mode="CBC"/>
+	</secure-properties:config>
+
+	<!-- Application Properties Configuration -->
+	<configuration-properties doc:name="Application Properties" file="application.yaml"/>
+
+	<!-- Global Error Handler Reference -->
+	<error-handler name="Global_Error_Handler" doc:name="Global Error Handler">
+		<on-error-propagate type="DB:CONNECTIVITY" enableNotifications="true" logException="true" doc:name="Database Connectivity Error">
+			<logger level="ERROR" doc:name="Log DB Connectivity Error" 
+				message="#['[' ++ correlationId ++ '] Database connectivity error: ' ++ error.description]"/>
+			<set-variable variableName="errorCategory" value="DATABASE_CONNECTIVITY" doc:name="Set Error Category"/>
+		</on-error-propagate>
+		<on-error-propagate type="DB:QUERY_EXECUTION" enableNotifications="true" logException="true" doc:name="Database Query Error">
+			<logger level="ERROR" doc:name="Log DB Query Error" 
+				message="#['[' ++ correlationId ++ '] Database query execution error: ' ++ error.description]"/>
+			<set-variable variableName="errorCategory" value="DATABASE_QUERY" doc:name="Set Error Category"/>
+		</on-error-propagate>
+		<on-error-propagate type="SAP:CONNECTIVITY" enableNotifications="true" logException="true" doc:name="SAP Connectivity Error">
+			<logger level="ERROR" doc:name="Log SAP Connectivity Error" 
+				message="#['[' ++ correlationId ++ '] SAP connectivity error: ' ++ error.description]"/>
+			<set-variable variableName="errorCategory" value="SAP_CONNECTIVITY" doc:name="Set Error Category"/>
+		</on-error-propagate>
+		<on-error-propagate type="SAP:EXECUTION" enableNotifications="true" logException="true" doc:name="SAP Execution Error">
+			<logger level="ERROR" doc:name="Log SAP Execution Error" 
+				message="#['[' ++ correlationId ++ '] SAP execution error: ' ++ error.description]"/>
+			<set-variable variableName="errorCategory" value="SAP_EXECUTION" doc:name="Set Error Category"/>
+		</on-error-propagate>
+		<on-error-propagate type="TRANSFORMATION" enableNotifications="true" logException="true" doc:name="Transformation Error">
+			<logger level="ERROR" doc:name="Log Transformation Error" 
+				message="#['[' ++ correlationId ++ '] Data transformation error: ' ++ error.description]"/>
+			<set-variable variableName="errorCategory" value="TRANSFORMATION" doc:name="Set Error Category"/>
+		</on-error-propagate>
+		<on-error-propagate type="OS:KEY_NOT_FOUND" enableNotifications="true" logException="true" doc:name="Object Store Key Not Found">
+			<logger level="WARN" doc:name="Log OS Key Not Found" 
+				message="#['[' ++ correlationId ++ '] Object store key not found: ' ++ error.description]"/>
+			<set-variable variableName="errorCategory" value="OBJECTSTORE_KEY_NOT_FOUND" doc:name="Set Error Category"/>
+		</on-error-propagate>
+		<on-error-propagate type="RETRY_EXHAUSTED" enableNotifications="true" logException="true" doc:name="Retry Exhausted Error">
+			<logger level="ERROR" doc:name="Log Retry Exhausted" 
+				message="#['[' ++ correlationId ++ '] Retry exhausted after maximum attempts: ' ++ error.description]"/>
+			<set-variable variableName="errorCategory" value="RETRY_EXHAUSTED" doc:name="Set Error Category"/>
+		</on-error-propagate>
+		<on-error-propagate type="ANY" enableNotifications="true" logException="true" doc:name="Generic Error Handler">
+			<logger level="ERROR" doc:name="Log Generic Error" 
+				message="#['[' ++ correlationId ++ '] Unexpected error occurred: ' ++ error.errorType.identifier ++ ' - ' ++ error.description]"/>
+			<set-variable variableName="errorCategory" value="UNKNOWN" doc:name="Set Error Category"/>
+		</on-error-propagate>
+	</error-handler>
+
+	<!-- MySQL Database Configuration -->
+	<db:config name="MySQL_Database_Config" doc:name="MySQL Database Config">
+		<db:my-sql-connection 
+			host="${db.host}" 
+			port="${db.port}" 
+			user="${secure::db.user}" 
+			password="${secure::db.password}" 
+			database="${db.database}">
+			<reconnection>
+				<reconnect frequency="${db.reconnect.frequency}" count="${db.reconnect.count}"/>
+			</reconnection>
+			<db:pooling-profile maxPoolSize="${db.pool.maxSize}" minPoolSize="${db.pool.minSize}"/>
+		</db:my-sql-connection>
+	</db:config>
+
+	<!-- SAP Connector Configuration -->
+	<sap:sap-config name="SAP_Config" doc:name="SAP Config">
+		<sap:simple-connection-provider-connection 
+			applicationServerHost="${sap.host}" 
+			username="${secure::sap.user}" 
+			password="${secure::sap.password}" 
+			systemNumber="${sap.systemNumber}" 
+			client="${sap.client}" 
+			loginLanguage="${sap.language}">
+			<reconnection>
+				<reconnect frequency="${sap.reconnect.frequency}" count="${sap.reconnect.count}"/>
+			</reconnection>
+		</sap:simple-connection-provider-connection>
+	</sap:sap-config>
+
+	<!-- Object Store for Watermark Persistence -->
+	<os:object-store name="Watermark_Object_Store" 
+		doc:name="Watermark Object Store"
+		persistent="true" 
+		maxEntries="${objectstore.maxEntries}" 
+		entryTtl="${objectstore.entryTtl}" 
+		entryTtlUnit="DAYS" 
+		expirationInterval="1" 
+		expirationIntervalUnit="HOURS"/>
+
+	<!-- Object Store for Distributed Lock -->
+	<os:object-store name="Lock_Object_Store" 
+		doc:name="Lock Object Store"
+		persistent="true" 
+		maxEntries="10" 
+		entryTtl="${objectstore.lockTtl}" 
+		entryTtlUnit="SECONDS" 
+		expirationInterval="60" 
+		expirationIntervalUnit="SECONDS"/>
+
+</mule>

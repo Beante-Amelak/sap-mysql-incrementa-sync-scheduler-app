@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:os="http://www.mulesoft.org/schema/mule/os"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xsi:schemaLocation="
+		http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+		http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+		http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+	<!-- 
+		Watermark Management Subflow
+		Handles watermark persistence using Object Store v2.
+		Supports:
+		- Retrieve watermark with default value
+		- Persist new watermark after successful sync
+		- Distributed locking for multi-instance deployments
+	-->
+
+	<!-- Retrieve Watermark Subflow -->
+	<sub-flow name="retrieve-watermark-subflow" doc:name="Retrieve Watermark Subflow">
+		<logger level="DEBUG" doc:name="Log Retrieve Start" 
+			message="#['[' ++ correlationId ++ '] Retrieving watermark from Object Store']"/>
+
+		<!-- Retrieve watermark with default value for first run -->
+		<os:retrieve doc:name="Retrieve Watermark" 
+			key="${objectstore.watermarkKey}" 
+			objectStore="Watermark_Object_Store" 
+			target="currentWatermark">
+			<os:default-value><![CDATA[#[p('sync.defaultWatermark')]]]></os:default-value>
+		</os:retrieve>
+
+		<logger level="INFO" doc:name="Log Watermark Retrieved" 
+			message="#['[' ++ correlationId ++ '] Current watermark: ' ++ (vars.currentWatermark as String default 'N/A')]"/>
+	</sub-flow>
+
+	<!-- Persist Watermark Subflow -->
+	<sub-flow name="persist-watermark-subflow" doc:name="Persist Watermark Subflow">
+		<logger level="DEBUG" doc:name="Log Persist Start" 
+			message="#['[' ++ correlationId ++ '] Persisting new watermark: ' ++ (vars.currentWatermark as String default 'N/A')]"/>
+
+		<!-- Store new watermark value -->
+		<os:store doc:name="Store Watermark" 
+			key="${objectstore.watermarkKey}" 
+			objectStore="Watermark_Object_Store" 
+			failIfPresent="false">
+			<os:value><![CDATA[#[vars.currentWatermark as String]]]></os:value>
+		</os:store>
+
+		<logger level="INFO" doc:name="Log Watermark Persisted" 
+			message="#['[' ++ correlationId ++ '] Watermark persisted successfully: ' ++ (vars.currentWatermark as String default 'N/A')]"/>
+	</sub-flow>
+
+	<!-- Acquire Distributed Lock Subflow -->
+	<sub-flow name="acquire-distributed-lock-subflow" doc:name="Acquire Distributed Lock Subflow">
+		<logger level="DEBUG" doc:name="Log Lock Acquire Start" 
+			message="#['[' ++ correlationId ++ '] Attempting to acquire distributed lock']"/>
+
+		<!-- Check if lock exists -->
+		<os:contains doc:name="Check Lock Exists" 
+			key="${objectstore.lockKey}" 
+			objectStore="Lock_Object_Store" 
+			target="lockExists"/>
+
+		<choice doc:name="Lock Exists Check">
+			<when expression="#[vars.lockExists == true]">
+				<!-- Lock exists - another instance is running -->
+				<logger level="WARN" doc:name="Log Lock Exists" 
+					message="#['[' ++ correlationId ++ '] Distributed lock already held by another instance. Skipping execution.']"/>
+				<raise-error doc:name="Raise Lock Error" type="APP:LOCK_HELD" description="Another instance is currently processing. Skipping this execution."/>
+			</when>
+			<otherwise>
+				<!-- Acquire lock -->
+				<os:store doc:name="Acquire Lock" 
+					key="${objectstore.lockKey}" 
+					objectStore="Lock_Object_Store" 
+					failIfPresent="true">
+					<os:value><![CDATA[#[{
+	instanceId: server.host default "unknown",
+	acquiredAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+	correlationId: correlationId
+}]]]></os:value>
+				</os:store>
+				<logger level="INFO" doc:name="Log Lock Acquired" 
+					message="#['[' ++ correlationId ++ '] Distributed lock acquired successfully']"/>
+			</otherwise>
+		</choice>
+	</sub-flow>
+
+	<!-- Release Distributed Lock Subflow -->
+	<sub-flow name="release-distributed-lock-subflow" doc:name="Release Distributed Lock Subflow">
+		<logger level="DEBUG" doc:name="Log Lock Release Start" 
+			message="#['[' ++ correlationId ++ '] Releasing distributed lock']"/>
+
+		<try doc:name="Try Release Lock">
+			<os:remove doc:name="Remove Lock" 
+				key="${objectstore.lockKey}" 
+				objectStore="Lock_Object_Store"/>
+			
+			<logger level="INFO" doc:name="Log Lock Released" 
+				message="#['[' ++ correlationId ++ '] Distributed lock released successfully']"/>
+			
+			<error-handler>
+				<on-error-continue type="OS:KEY_NOT_FOUND" doc:name="Lock Not Found">
+					<logger level="WARN" doc:name="Log Lock Not Found" 
+						message="#['[' ++ correlationId ++ '] Lock key not found - may have expired or been released']"/>
+				</on-error-continue>
+				<on-error-continue type="ANY" doc:name="Any Error">
+					<logger level="ERROR" doc:name="Log Lock Release Error" 
+						message="#['[' ++ correlationId ++ '] Error releasing lock: ' ++ error.description]"/>
+				</on-error-continue>
+			</error-handler>
+		</try>
+	</sub-flow>
+
+	<!-- Reset Watermark Subflow (Administrative) -->
+	<sub-flow name="reset-watermark-subflow" doc:name="Reset Watermark Subflow">
+		<logger level="WARN" doc:name="Log Reset Start" 
+			message="#['[' ++ correlationId ++ '] Resetting watermark to default value']"/>
+
+		<!-- Remove existing watermark -->
+		<try doc:name="Try Remove Watermark">
+			<os:remove doc:name="Remove Watermark" 
+				key="${objectstore.watermarkKey}" 
+				objectStore="Watermark_Object_Store"/>
+			<error-handler>
+				<on-error-continue type="OS:KEY_NOT_FOUND" doc:name="Key Not Found">
+					<logger level="DEBUG" doc:name="Log Key Not Found" 
+						message="#['[' ++ correlationId ++ '] Watermark key not found - nothing to reset']"/>
+				</on-error-continue>
+			</error-handler>
+		</try>
+
+		<!-- Store default watermark -->
+		<os:store doc:name="Store Default Watermark" 
+			key="${objectstore.watermarkKey}" 
+			objectStore="Watermark_Object_Store" 
+			failIfPresent="false">
+			<os:value><![CDATA[#[p('sync.defaultWatermark')]]]></os:value>
+		</os:store>
+
+		<logger level="INFO" doc:name="Log Reset Complete" 
+			message="#['[' ++ correlationId ++ '] Watermark reset to: ' ++ p('sync.defaultWatermark')]"/>
+	</sub-flow>
+
+</mule>

@@ -1,0 +1,62 @@
+# MySQL to SAP Incremental Sync - Application Configuration
+# Non-sensitive configuration properties
+
+# Scheduler Configuration
+scheduler:
+  cron: "0 0/30 * * * ?"
+  timezone: "UTC"
+  state: "started"
+  startDelay: "10000"
+
+# MySQL Database Configuration
+db:
+  host: "localhost"
+  port: "3306"
+  database: "source_db"
+  pool:
+    maxSize: "10"
+    minSize: "2"
+  reconnect:
+    frequency: "5000"
+    count: "5"
+
+# SAP Configuration
+sap:
+  host: "sap.example.com"
+  systemNumber: "00"
+  client: "100"
+  language: "EN"
+  reconnect:
+    frequency: "5000"
+    count: "3"
+
+# Sync Configuration
+sync:
+  batchSize: "500"
+  fetchSize: "1000"
+  tableName: "orders"
+  watermarkColumn: "updated_at"
+  defaultWatermark: "1970-01-01T00:00:00Z"
+  maxFailedRecords: "100"
+
+# Object Store Configuration
+objectstore:
+  watermarkKey: "mysql_sap_sync_watermark"
+  lockKey: "mysql_sap_sync_lock"
+  lockTtl: "3600"
+  entryTtl: "365"
+  maxEntries: "100"
+
+# Retry Configuration
+retry:
+  maxAttempts: "3"
+  frequency: "5000"
+
+# Logging Configuration
+logging:
+  level: "INFO"
+
+# Feature Toggles
+features:
+  batchProcessing: "true"
+  distributedLock: "true"

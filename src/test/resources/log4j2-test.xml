@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN">
+
+    <!-- MUnit Test Log4j2 Configuration -->
+
+    <Appenders>
+        <Console name="Console" target="SYSTEM_OUT">
+            <PatternLayout pattern="%-5p %d{HH:mm:ss.SSS} [%t] [correlationId: %X{correlationId}] %c{1}: %m%n"/>
+        </Console>
+    </Appenders>
+
+    <Loggers>
+        <!-- HTTP Logger - Suppress unless debugging -->
+        <AsyncLogger name="org.mule.service.http" level="WARN"/>
+        <AsyncLogger name="org.mule.extension.http" level="WARN"/>
+
+        <!-- Reduce startup noise -->
+        <AsyncLogger name="com.mulesoft.mule.runtime.plugin" level="WARN"/>
+        <AsyncLogger name="org.mule.maven.client" level="WARN"/>
+        <AsyncLogger name="org.mule.runtime.core.internal.util" level="WARN"/>
+        <AsyncLogger name="org.quartz" level="WARN"/>
+        <AsyncLogger name="org.mule.munit.plugins.coverage.server" level="WARN"/>
+
+        <!-- Database Connector -->
+        <AsyncLogger name="org.mule.extension.db" level="WARN"/>
+
+        <!-- SAP Connector -->
+        <AsyncLogger name="com.mulesoft.connector.sap" level="WARN"/>
+
+        <!-- Object Store -->
+        <AsyncLogger name="org.mule.extension.objectstore" level="WARN"/>
+
+        <!-- Suppress noisy loggers -->
+        <AsyncLogger name="org.apache.cxf" level="WARN"/>
+        <AsyncLogger name="org.apache.http" level="WARN"/>
+        <AsyncLogger name="org.springframework" level="WARN"/>
+
+        <!-- Mule logger -->
+        <AsyncLogger name="org.mule.runtime.core.internal.processor.LoggerMessageProcessor" level="INFO"/>
+
+        <AsyncRoot level="INFO">
+            <AppenderRef ref="Console"/>
+        </AsyncRoot>
+    </Loggers>
+
+</Configuration>

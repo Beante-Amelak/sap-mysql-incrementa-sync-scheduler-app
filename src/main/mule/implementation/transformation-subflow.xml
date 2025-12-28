@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xsi:schemaLocation="
+		http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+		http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+	<!-- 
+		Transformation Subflow
+		Transforms MySQL order records to SAP BAPI format.
+		Supports both RFC/BAPI calls and IDoc format.
+		Includes data validation and field mapping.
+	-->
+
+	<sub-flow name="transformation-subflow" doc:name="Transformation Subflow">
+		<!-- Store original record ID for error tracking -->
+		<set-variable variableName="currentRecordId" value="#[payload.id]" doc:name="Store Record ID"/>
+		
+		<logger level="DEBUG" doc:name="Log Transform Start" 
+			message="#['[' ++ correlationId ++ '] Transforming record ID: ' ++ (payload.id as String default 'N/A')]"/>
+
+		<!-- Transform to SAP BAPI Format (BAPI_SALESORDER_CREATEFROMDAT2) -->
+		<ee:transform doc:name="Transform to SAP BAPI Format">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/xml
+---
+{
+	BAPI_SALESORDER_CREATEFROMDAT2: {
+		"import": {
+			// Order Header Data
+			ORDER_HEADER_IN: {
+				DOC_TYPE: "TA",
+				SALES_ORG: payload.salesOrganization default "1000",
+				DISTR_CHAN: payload.distributionChannel default "10",
+				DIVISION: payload.division default "00",
+				PURCH_NO_C: payload.orderNumber,
+				PURCH_DATE: (payload.orderDate as Date default now()) as String {format: "yyyyMMdd"},
+				REQ_DATE_H: (payload.deliveryDate as Date default (now() + |P7D|)) as String {format: "yyyyMMdd"},
+				CURRENCY: payload.currency default "USD"
+			},
+			// Order Header Partner Data
+			ORDER_HEADER_INX: {
+				UPDATEFLAG: "I",
+				DOC_TYPE: "X",
+				SALES_ORG: "X",
+				DISTR_CHAN: "X",
+				DIVISION: "X",
+				PURCH_NO_C: "X",
+				PURCH_DATE: "X",
+				REQ_DATE_H: "X",
+				CURRENCY: "X"
+			}
+		},
+		tables: {
+			// Order Partners
+			ORDER_PARTNERS: {
+				row: {
+					PARTN_ROLE: "AG",
+					PARTN_NUMB: payload.customerId
+				}
+			},
+			// Order Items
+			ORDER_ITEMS_IN: {
+				row: {
+					ITM_NUMBER: "000010",
+					MATERIAL: payload.materialNumber,
+					PLANT: payload.plantCode default "1000",
+					STORE_LOC: payload.storageLocation default "0001",
+					TARGET_QTY: payload.quantity,
+					TARGET_QU: payload.unitOfMeasure default "EA"
+				}
+			},
+			// Order Items Update Flags
+			ORDER_ITEMS_INX: {
+				row: {
+					ITM_NUMBER: "000010",
+					UPDATEFLAG: "I",
+					MATERIAL: "X",
+					PLANT: "X",
+					STORE_LOC: "X",
+					TARGET_QTY: "X",
+					TARGET_QU: "X"
+				}
+			},
+			// Order Conditions (Pricing)
+			ORDER_CONDITIONS_IN: {
+				row: {
+					ITM_NUMBER: "000010",
+					COND_TYPE: "PR00",
+					COND_VALUE: payload.unitPrice,
+					CURRENCY: payload.currency default "USD"
+				}
+			},
+			// Order Schedules
+			ORDER_SCHEDULES_IN: {
+				row: {
+					ITM_NUMBER: "000010",
+					SCHED_LINE: "0001",
+					REQ_DATE: (payload.deliveryDate as Date default (now() + |P7D|)) as String {format: "yyyyMMdd"},
+					REQ_QTY: payload.quantity
+				}
+			},
+			// Order Schedules Update Flags
+			ORDER_SCHEDULES_INX: {
+				row: {
+					ITM_NUMBER: "000010",
+					SCHED_LINE: "0001",
+					UPDATEFLAG: "I",
+					REQ_DATE: "X",
+					REQ_QTY: "X"
+				}
+			}
+		}
+	}
+}]]></ee:set-payload>
+			</ee:message>
+			<ee:variables>
+				<ee:set-variable variableName="sapRequestType"><![CDATA[%dw 2.0
+output application/java
+---
+"BAPI"]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+
+		<logger level="DEBUG" doc:name="Log Transform Complete" 
+			message="#['[' ++ correlationId ++ '] Record transformed to SAP format. RecordId: ' ++ (vars.currentRecordId as String default 'N/A')]"/>
+	</sub-flow>
+
+	<!-- 
+		IDoc Transformation Subflow
+		Alternative transformation for IDoc-based integration.
+		Used when SAP system requires IDoc format instead of BAPI.
+	-->
+	<sub-flow name="transformation-idoc-subflow" doc:name="IDoc Transformation Subflow">
+		<set-variable variableName="currentRecordId" value="#[payload.id]" doc:name="Store Record ID"/>
+		
+		<ee:transform doc:name="Transform to SAP IDoc Format">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/xml
+---
+{
+	ORDERS05: {
+		IDOC: {
+			EDI_DC40: {
+				TABNAM: "EDI_DC40",
+				MANDT: p('sap.client'),
+				DOCNUM: "",
+				DOCREL: "750",
+				STATUS: "30",
+				DIRECT: "1",
+				OUTMOD: "2",
+				IDOCTYP: "ORDERS05",
+				MESTYP: "ORDERS",
+				SNDPOR: "MULESOFT",
+				SNDPRT: "LS",
+				SNDPRN: "MULE_SYSTEM",
+				RCVPOR: "SAPPORT",
+				RCVPRT: "LS",
+				RCVPRN: "SAP_SYSTEM"
+			},
+			E1EDK01: {
+				CURCY: payload.currency default "USD",
+				BSART: "TA",
+				BELNR: payload.orderNumber
+			},
+			E1EDK14: {
+				QUESSION: "001",
+				ORGID: payload.salesOrganization default "1000"
+			},
+			E1EDKA1: {
+				PARVW: "AG",
+				PARTN: payload.customerId,
+				NAME1: payload.customerName
+			},
+			E1EDP01: {
+				POSEX: "000010",
+				MENGE: payload.quantity as String,
+				MENEE: payload.unitOfMeasure default "EA",
+				WERKS: payload.plantCode default "1000",
+				LGORT: payload.storageLocation default "0001",
+				E1EDP19: {
+					QUESSION: "001",
+					IDTNR: payload.materialNumber,
+					KTEXT: payload.materialDescription
+				},
+				E1EDP05: {
+					ALESSION: "PR00",
+					BEESSION: payload.unitPrice as String
+				}
+			}
+		}
+	}
+}]]></ee:set-payload>
+			</ee:message>
+			<ee:variables>
+				<ee:set-variable variableName="sapRequestType"><![CDATA[%dw 2.0
+output application/java
+---
+"IDOC"]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+
+		<logger level="DEBUG" doc:name="Log IDoc Transform Complete" 
+			message="#['[' ++ correlationId ++ '] Record transformed to IDoc format. RecordId: ' ++ (vars.currentRecordId as String default 'N/A')]"/>
+	</sub-flow>
+
+</mule>

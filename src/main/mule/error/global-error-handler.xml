@@ -1,0 +1,284 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xsi:schemaLocation="
+		http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+		http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+	<!-- 
+		Global Error Handler for MySQL to SAP Sync Application
+		This file contains the centralized error handling framework with:
+		- Error categorization
+		- Structured JSON logging
+		- Correlation ID propagation
+		- Dead-letter logging for failed records
+	-->
+
+	<!-- Error Handler for Scheduler Flow -->
+	<error-handler name="Scheduler_Error_Handler" doc:name="Scheduler Error Handler">
+		<!-- Database Connectivity Errors -->
+		<on-error-propagate type="DB:CONNECTIVITY" enableNotifications="true" logException="true" doc:name="Database Connectivity Error">
+			<ee:transform doc:name="Build Error Response">
+				<ee:message>
+					<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	errorId: uuid(),
+	correlationId: correlationId,
+	timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+	errorType: "DATABASE_CONNECTIVITY",
+	errorCode: error.errorType.identifier,
+	message: error.description default "Database connectivity error",
+	cause: error.cause.message default null,
+	severity: "CRITICAL"
+}]]></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+			<logger level="ERROR" doc:name="Log DB Connectivity Error" 
+				message="#['[' ++ correlationId ++ '] DATABASE_CONNECTIVITY_ERROR: ' ++ write(payload, 'application/json')]"/>
+		</on-error-propagate>
+
+		<!-- Database Query Execution Errors -->
+		<on-error-propagate type="DB:QUERY_EXECUTION" enableNotifications="true" logException="true" doc:name="Database Query Error">
+			<ee:transform doc:name="Build Error Response">
+				<ee:message>
+					<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	errorId: uuid(),
+	correlationId: correlationId,
+	timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+	errorType: "DATABASE_QUERY_EXECUTION",
+	errorCode: error.errorType.identifier,
+	message: error.description default "Database query execution error",
+	cause: error.cause.message default null,
+	severity: "HIGH"
+}]]></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+			<logger level="ERROR" doc:name="Log DB Query Error" 
+				message="#['[' ++ correlationId ++ '] DATABASE_QUERY_ERROR: ' ++ write(payload, 'application/json')]"/>
+		</on-error-propagate>
+
+		<!-- SAP Connectivity Errors -->
+		<on-error-propagate type="SAP:CONNECTIVITY" enableNotifications="true" logException="true" doc:name="SAP Connectivity Error">
+			<ee:transform doc:name="Build Error Response">
+				<ee:message>
+					<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	errorId: uuid(),
+	correlationId: correlationId,
+	timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+	errorType: "SAP_CONNECTIVITY",
+	errorCode: error.errorType.identifier,
+	message: error.description default "SAP connectivity error",
+	cause: error.cause.message default null,
+	severity: "CRITICAL"
+}]]></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+			<logger level="ERROR" doc:name="Log SAP Connectivity Error" 
+				message="#['[' ++ correlationId ++ '] SAP_CONNECTIVITY_ERROR: ' ++ write(payload, 'application/json')]"/>
+		</on-error-propagate>
+
+		<!-- SAP Execution Errors -->
+		<on-error-propagate type="SAP:EXECUTION" enableNotifications="true" logException="true" doc:name="SAP Execution Error">
+			<ee:transform doc:name="Build Error Response">
+				<ee:message>
+					<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	errorId: uuid(),
+	correlationId: correlationId,
+	timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+	errorType: "SAP_EXECUTION",
+	errorCode: error.errorType.identifier,
+	message: error.description default "SAP execution error",
+	cause: error.cause.message default null,
+	severity: "HIGH"
+}]]></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+			<logger level="ERROR" doc:name="Log SAP Execution Error" 
+				message="#['[' ++ correlationId ++ '] SAP_EXECUTION_ERROR: ' ++ write(payload, 'application/json')]"/>
+		</on-error-propagate>
+
+		<!-- Data Transformation Errors -->
+		<on-error-propagate type="TRANSFORMATION" enableNotifications="true" logException="true" doc:name="Transformation Error">
+			<ee:transform doc:name="Build Error Response">
+				<ee:message>
+					<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	errorId: uuid(),
+	correlationId: correlationId,
+	timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+	errorType: "DATA_TRANSFORMATION",
+	errorCode: error.errorType.identifier,
+	message: error.description default "Data transformation error",
+	cause: error.cause.message default null,
+	severity: "MEDIUM"
+}]]></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+			<logger level="ERROR" doc:name="Log Transformation Error" 
+				message="#['[' ++ correlationId ++ '] TRANSFORMATION_ERROR: ' ++ write(payload, 'application/json')]"/>
+		</on-error-propagate>
+
+		<!-- Object Store Errors -->
+		<on-error-continue type="OS:KEY_NOT_FOUND" enableNotifications="false" logException="false" doc:name="Object Store Key Not Found">
+			<logger level="INFO" doc:name="Log OS Key Not Found" 
+				message="#['[' ++ correlationId ++ '] Object store key not found - using default watermark value']"/>
+		</on-error-continue>
+
+		<!-- Retry Exhausted Errors -->
+		<on-error-propagate type="RETRY_EXHAUSTED" enableNotifications="true" logException="true" doc:name="Retry Exhausted Error">
+			<ee:transform doc:name="Build Error Response">
+				<ee:message>
+					<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	errorId: uuid(),
+	correlationId: correlationId,
+	timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+	errorType: "RETRY_EXHAUSTED",
+	errorCode: error.errorType.identifier,
+	message: error.description default "Retry exhausted after maximum attempts",
+	cause: error.cause.message default null,
+	severity: "CRITICAL"
+}]]></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+			<logger level="ERROR" doc:name="Log Retry Exhausted" 
+				message="#['[' ++ correlationId ++ '] RETRY_EXHAUSTED_ERROR: ' ++ write(payload, 'application/json')]"/>
+		</on-error-propagate>
+
+		<!-- Timeout Errors -->
+		<on-error-propagate type="MULE:TIMEOUT" enableNotifications="true" logException="true" doc:name="Timeout Error">
+			<ee:transform doc:name="Build Error Response">
+				<ee:message>
+					<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	errorId: uuid(),
+	correlationId: correlationId,
+	timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+	errorType: "TIMEOUT",
+	errorCode: error.errorType.identifier,
+	message: error.description default "Operation timed out",
+	cause: error.cause.message default null,
+	severity: "HIGH"
+}]]></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+			<logger level="ERROR" doc:name="Log Timeout Error" 
+				message="#['[' ++ correlationId ++ '] TIMEOUT_ERROR: ' ++ write(payload, 'application/json')]"/>
+		</on-error-propagate>
+
+		<!-- Generic Error Handler (Catch-All) -->
+		<on-error-propagate type="ANY" enableNotifications="true" logException="true" doc:name="Generic Error Handler">
+			<ee:transform doc:name="Build Error Response">
+				<ee:message>
+					<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	errorId: uuid(),
+	correlationId: correlationId,
+	timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+	errorType: "UNKNOWN",
+	errorCode: error.errorType.identifier,
+	message: error.description default "An unexpected error occurred",
+	cause: error.cause.message default null,
+	severity: "HIGH"
+}]]></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+			<logger level="ERROR" doc:name="Log Generic Error" 
+				message="#['[' ++ correlationId ++ '] UNEXPECTED_ERROR: ' ++ write(payload, 'application/json')]"/>
+		</on-error-propagate>
+	</error-handler>
+
+	<!-- Error Handler for Batch Processing -->
+	<error-handler name="Batch_Error_Handler" doc:name="Batch Error Handler">
+		<!-- SAP Errors during Batch - Continue processing other records -->
+		<on-error-continue type="SAP:EXECUTION" enableNotifications="true" logException="true" doc:name="SAP Batch Error">
+			<ee:transform doc:name="Build Dead Letter Record">
+				<ee:message>
+					<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	deadLetterId: uuid(),
+	correlationId: correlationId,
+	timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+	errorType: "SAP_BATCH_EXECUTION",
+	errorCode: error.errorType.identifier,
+	message: error.description default "SAP batch execution error",
+	recordId: vars.currentRecordId default null,
+	severity: "HIGH"
+}]]></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+			<logger level="ERROR" doc:name="Log Dead Letter Record" 
+				message="#['[' ++ correlationId ++ '] DEAD_LETTER_RECORD: ' ++ write(payload, 'application/json')]"/>
+		</on-error-continue>
+
+		<!-- Transformation Errors during Batch - Continue processing -->
+		<on-error-continue type="TRANSFORMATION" enableNotifications="true" logException="true" doc:name="Batch Transformation Error">
+			<ee:transform doc:name="Build Dead Letter Record">
+				<ee:message>
+					<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	deadLetterId: uuid(),
+	correlationId: correlationId,
+	timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+	errorType: "BATCH_TRANSFORMATION",
+	errorCode: error.errorType.identifier,
+	message: error.description default "Batch transformation error",
+	recordId: vars.currentRecordId default null,
+	severity: "MEDIUM"
+}]]></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+			<logger level="ERROR" doc:name="Log Dead Letter Record" 
+				message="#['[' ++ correlationId ++ '] DEAD_LETTER_RECORD: ' ++ write(payload, 'application/json')]"/>
+		</on-error-continue>
+
+		<!-- Generic Batch Error - Continue processing -->
+		<on-error-continue type="ANY" enableNotifications="true" logException="true" doc:name="Generic Batch Error">
+			<ee:transform doc:name="Build Dead Letter Record">
+				<ee:message>
+					<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	deadLetterId: uuid(),
+	correlationId: correlationId,
+	timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+	errorType: "BATCH_UNKNOWN",
+	errorCode: error.errorType.identifier,
+	message: error.description default "Unknown batch error",
+	recordId: vars.currentRecordId default null,
+	severity: "HIGH"
+}]]></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+			<logger level="ERROR" doc:name="Log Dead Letter Record" 
+				message="#['[' ++ correlationId ++ '] DEAD_LETTER_RECORD: ' ++ write(payload, 'application/json')]"/>
+		</on-error-continue>
+	</error-handler>
+
+</mule>

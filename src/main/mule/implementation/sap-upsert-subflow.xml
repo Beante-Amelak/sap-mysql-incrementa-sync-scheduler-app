@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:sap="http://www.mulesoft.org/schema/mule/sap"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xsi:schemaLocation="
+		http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+		http://www.mulesoft.org/schema/mule/sap http://www.mulesoft.org/schema/mule/sap/current/mule-sap.xsd
+		http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+	<!-- 
+		SAP Upsert Subflow
+		Sends transformed data to SAP using RFC/BAPI or IDoc.
+		Includes retry logic for transient failures.
+		Handles SAP response validation.
+	-->
+
+	<sub-flow name="sap-upsert-subflow" doc:name="SAP Upsert Subflow">
+		<logger level="DEBUG" doc:name="Log SAP Upsert Start" 
+			message="#['[' ++ correlationId ++ '] Starting SAP upsert. RecordId: ' ++ (vars.currentRecordId as String default 'N/A') ++ ', RequestType: ' ++ (vars.sapRequestType default 'BAPI')]"/>
+
+		<!-- Retry wrapper for transient SAP failures -->
+		<until-successful maxRetries="${retry.maxAttempts}" 
+			millisBetweenRetries="${retry.frequency}" 
+			doc:name="Retry SAP Call">
+			
+			<!-- Route based on request type (BAPI or IDoc) -->
+			<choice doc:name="Route by Request Type">
+				<when expression="#[vars.sapRequestType == 'IDOC']">
+					<!-- Send IDoc to SAP -->
+					<sap:send doc:name="Send IDoc to SAP" 
+						config-ref="SAP_Config" 
+						key="ORDERS05" 
+						version="3">
+						<sap:content><![CDATA[#[payload]]]></sap:content>
+					</sap:send>
+				
+</when>
+				<otherwise>
+					<!-- Execute BAPI Call -->
+					<sap:synchronous-remote-function-call 
+						doc:name="Execute BAPI" 
+						config-ref="SAP_Config" 
+						key="BAPI_SALESORDER_CREATEFROMDAT2">
+						<sap:content><![CDATA[#[payload]]]></sap:content>
+					</sap:synchronous-remote-function-call>
+				</otherwise>
+			</choice>
+		</until-successful>
+
+		<!-- Process SAP Response -->
+		<ee:transform doc:name="Process SAP Response">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+var response = payload.BAPI_SALESORDER_CREATEFROMDAT2 default payload
+var returnMessages = response.tables.RETURN.*row default []
+var errors = returnMessages filter ($.TYPE == "E" or $.TYPE == "A")
+var salesDocument = response.export.SALESDOCUMENT default null
+---
+{
+	success: isEmpty(errors),
+	salesDocument: salesDocument,
+	recordId: vars.currentRecordId,
+	messages: returnMessages map {
+		"type": $.TYPE,
+		messageNumber: $.NUMBER,
+		message: $.MESSAGE
+	},
+	errors: errors map {
+		"type": $.TYPE,
+		messageNumber: $.NUMBER,
+		message: $.MESSAGE
+	}
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+
+		<!-- Validate SAP Response -->
+		<choice doc:name="Check SAP Response">
+			<when expression="#[payload.success == true]">
+				<logger level="INFO" doc:name="Log SAP Success" 
+					message="#['[' ++ correlationId ++ '] SAP upsert successful. RecordId: ' ++ (vars.currentRecordId as String default 'N/A') ++ ', SalesDocument: ' ++ (payload.salesDocument default 'N/A')]"/>
+			</when>
+			<otherwise>
+				<logger level="ERROR" doc:name="Log SAP Error" 
+					message="#['[' ++ correlationId ++ '] SAP upsert failed. RecordId: ' ++ (vars.currentRecordId as String default 'N/A') ++ ', Errors: ' ++ write(payload.errors, 'application/json')]"/>
+				<!-- Raise error for failed SAP operations -->
+				<raise-error doc:name="Raise SAP Error" type="APP:SAP_UPSERT_FAILED" description="#['SAP upsert failed for record ' ++ (vars.currentRecordId as String default 'N/A') ++ ': ' ++ (payload.errors[0].message default 'Unknown error')]"/>
+			</otherwise>
+		</choice>
+	</sub-flow>
+
+	<!-- 
+		SAP Commit Transaction Subflow
+		Commits the SAP transaction after successful BAPI call.
+		Required for some BAPI operations to persist changes.
+	-->
+	<sub-flow name="sap-commit-transaction-subflow" doc:name="SAP Commit Transaction Subflow">
+		<ee:transform doc:name="Prepare Commit Request">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/xml
+---
+{
+	BAPI_TRANSACTION_COMMIT: {
+		"import": {
+			WAIT: "X"
+		}
+	}
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+
+		<sap:synchronous-remote-function-call 
+			doc:name="Commit Transaction" 
+			config-ref="SAP_Config" 
+			key="BAPI_TRANSACTION_COMMIT">
+			<sap:content><![CDATA[#[payload]]]></sap:content>
+		</sap:synchronous-remote-function-call>
+
+		<logger level="DEBUG" doc:name="Log Commit Complete" 
+			message="#['[' ++ correlationId ++ '] SAP transaction committed']"/>
+	</sub-flow>
+
+	<!-- 
+		SAP Health Check Subflow
+		Verifies SAP connectivity before main processing.
+	-->
+	<sub-flow name="sap-health-check-subflow" doc:name="SAP Health Check Subflow">
+		<ee:transform doc:name="Prepare Health Check Request">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/xml
+---
+{
+	RFC_PING: {}
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+
+		<sap:synchronous-remote-function-call 
+			doc:name="SAP Ping" 
+			config-ref="SAP_Config" 
+			key="RFC_PING">
+			<sap:content><![CDATA[#[payload]]]></sap:content>
+		</sap:synchronous-remote-function-call>
+
+		<logger level="DEBUG" doc:name="Log Health Check" 
+			message="#['[' ++ correlationId ++ '] SAP health check successful']"/>
+	</sub-flow>
+
+</mule>

@@ -1,0 +1,232 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:os="http://www.mulesoft.org/schema/mule/os"
+	xmlns:batch="http://www.mulesoft.org/schema/mule/batch"
+	xsi:schemaLocation="
+		http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+		http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+		http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+		http://www.mulesoft.org/schema/mule/batch http://www.mulesoft.org/schema/mule/batch/current/mule-batch.xsd">
+
+	<!-- 
+		MySQL to SAP Incremental Sync - Main Scheduler Flow
+		This flow orchestrates the entire sync process:
+		1. Acquires distributed lock
+		2. Retrieves watermark
+		3. Fetches incremental records from MySQL
+		4. Transforms and sends to SAP via batch processing
+		5. Updates watermark on success
+		6. Releases lock
+	-->
+
+	<flow name="mysql-sap-sync-scheduler-flow" 
+		doc:name="MySQL SAP Sync Scheduler Flow" 
+		initialState="${scheduler.state}"
+		maxConcurrency="1">
+		
+		<!-- Scheduler Trigger with Cron Expression -->
+		<scheduler doc:name="Sync Scheduler" disallowConcurrentExecution="true">
+			<scheduling-strategy>
+				<cron expression="${scheduler.cron}" timeZone="${scheduler.timezone}"/>
+			</scheduling-strategy>
+		</scheduler>
+
+		<!-- Initialize Execution Context -->
+		<ee:transform doc:name="Initialize Execution Context">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+---
+null]]></ee:set-payload>
+			</ee:message>
+			<ee:variables>
+				<ee:set-variable variableName="executionId"><![CDATA[%dw 2.0
+output application/java
+---
+uuid()]]></ee:set-variable>
+				<ee:set-variable variableName="executionStartTime"><![CDATA[%dw 2.0
+output application/java
+---
+now()]]></ee:set-variable>
+				<ee:set-variable variableName="syncMetrics"><![CDATA[%dw 2.0
+output application/java
+---
+{
+	recordsRead: 0,
+	recordsSuccess: 0,
+	recordsFailure: 0,
+	batchJobId: null
+}]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+
+		<!-- Log Scheduler Execution Start -->
+		<logger level="INFO" doc:name="Log Execution Start" 
+			message="#['[' ++ correlationId ++ '] MySQL-SAP Sync started. ExecutionId: ' ++ vars.executionId ++ ', StartTime: ' ++ (vars.executionStartTime as String {format: \"yyyy-MM-dd'T'HH:mm:ss.SSSZ\"})]"/>
+
+		<!-- Try block for main orchestration with error handling -->
+		<try doc:name="Main Orchestration Try Block">
+			<!-- Step 1: Acquire Distributed Lock -->
+			<choice doc:name="Check Distributed Lock Feature">
+				<when expression="#[p('features.distributedLock') == 'true']">
+					<flow-ref doc:name="Acquire Lock" name="acquire-distributed-lock-subflow"/>
+				</when>
+				<otherwise>
+					<logger level="DEBUG" doc:name="Skip Lock" message="#['[' ++ correlationId ++ '] Distributed lock feature disabled']"/>
+				</otherwise>
+			</choice>
+
+			<!-- Step 2: Retrieve Current Watermark -->
+			<flow-ref doc:name="Retrieve Watermark" name="retrieve-watermark-subflow"/>
+			<set-variable variableName="previousWatermark" value="#[vars.currentWatermark]" doc:name="Store Previous Watermark"/>
+
+			<!-- Step 3: Fetch Incremental Records from MySQL -->
+			<flow-ref doc:name="Fetch MySQL Records" name="mysql-fetch-incremental-subflow"/>
+			
+			<!-- Update metrics with records read -->
+			<set-variable variableName="syncMetrics" doc:name="Update Records Read Metric">
+				<![CDATA[#[vars.syncMetrics ++ {recordsRead: sizeOf(payload default [])}]]]>
+			</set-variable>
+
+			<logger level="INFO" doc:name="Log Records Fetched" 
+				message="#['[' ++ correlationId ++ '] Fetched ' ++ (sizeOf(payload default [])) ++ ' records from MySQL since watermark: ' ++ (vars.currentWatermark as String default 'N/A')]"/>
+
+			<!-- Step 4: Process Records if any exist -->
+			<choice doc:name="Check Records Exist">
+				<when expression="#[!isEmpty(payload)]">
+					<!-- Store records for batch processing -->
+					<set-variable variableName="recordsToProcess" value="#[payload]" doc:name="Store Records"/>
+					
+					<!-- Calculate new watermark from fetched records -->
+					<ee:transform doc:name="Calculate New Watermark">
+						<ee:variables>
+							<ee:set-variable variableName="newWatermark"><![CDATA[%dw 2.0
+output application/java
+---
+max(vars.recordsToProcess map $.updated_at) default vars.currentWatermark]]></ee:set-variable>
+						</ee:variables>
+					</ee:transform>
+
+					<!-- Check if batch processing is enabled -->
+					<choice doc:name="Check Batch Processing Feature">
+						<when expression="#[p('features.batchProcessing') == 'true']">
+							<!-- Batch Processing Flow -->
+							<batch:job jobName="MySQL_SAP_Sync_Batch" 
+								doc:name="MySQL SAP Sync Batch Job"
+								blockSize="${sync.batchSize}" 
+								maxFailedRecords="${sync.maxFailedRecords}">
+								
+								<batch:process-records>
+									<!-- Step 4a: Transform Record to SAP Format -->
+									<batch:step name="Transform_Record_Step" doc:name="Transform Record Step">
+										<flow-ref doc:name="Transform to SAP" name="transformation-subflow"/>
+									</batch:step>
+									
+									<!-- Step 4b: Upsert to SAP -->
+									<batch:step name="SAP_Upsert_Step" doc:name="SAP Upsert Step" acceptPolicy="NO_FAILURES">
+										<flow-ref doc:name="Upsert to SAP" name="sap-upsert-subflow"/>
+									</batch:step>
+								</batch:process-records>
+								
+								<batch:on-complete>
+									<!-- Update sync metrics from batch results -->
+									<set-variable variableName="syncMetrics" doc:name="Update Batch Metrics">
+										<![CDATA[#[{
+	recordsRead: vars.syncMetrics.recordsRead,
+	recordsSuccess: payload.successfulRecords,
+	recordsFailure: payload.failedRecords,
+	batchJobId: payload.jobInstanceId
+}]]]>
+									</set-variable>
+									
+									<logger level="INFO" doc:name="Log Batch Complete" 
+										message="#['[' ++ correlationId ++ '] Batch job completed. JobId: ' ++ payload.jobInstanceId ++ ', Total: ' ++ payload.totalRecords ++ ', Success: ' ++ payload.successfulRecords ++ ', Failed: ' ++ payload.failedRecords]"/>
+									
+									<!-- Update watermark only if all records succeeded or partial success -->
+									<choice doc:name="Check Batch Success">
+										<when expression="#[payload.successfulRecords > 0]">
+											<set-variable variableName="currentWatermark" value="#[vars.newWatermark]" doc:name="Set New Watermark"/>
+											<flow-ref doc:name="Persist Watermark" name="persist-watermark-subflow"/>
+										</when>
+										<otherwise>
+											<logger level="WARN" doc:name="Log No Watermark Update" 
+												message="#['[' ++ correlationId ++ '] No successful records - watermark not updated']"/>
+										</otherwise>
+									</choice>
+								</batch:on-complete>
+							</batch:job>
+						</when>
+						<otherwise>
+							<!-- Sequential Processing (Non-Batch) -->
+							<foreach doc:name="Process Each Record" collection="#[vars.recordsToProcess]">
+								<try doc:name="Try Process Record">
+									<flow-ref doc:name="Transform to SAP" name="transformation-subflow"/>
+									<flow-ref doc:name="Upsert to SAP" name="sap-upsert-subflow"/>
+									<set-variable variableName="syncMetrics" doc:name="Increment Success">
+										<![CDATA[#[vars.syncMetrics ++ {recordsSuccess: vars.syncMetrics.recordsSuccess + 1}]]]>
+									</set-variable>
+									<error-handler>
+										<on-error-continue type="ANY" doc:name="Continue on Error">
+											<logger level="ERROR" doc:name="Log Record Error" 
+												message="#['[' ++ correlationId ++ '] Error processing record: ' ++ error.description]"/>
+											<set-variable variableName="syncMetrics" doc:name="Increment Failure">
+												<![CDATA[#[vars.syncMetrics ++ {recordsFailure: vars.syncMetrics.recordsFailure + 1}]]]>
+											</set-variable>
+										</on-error-continue>
+									</error-handler>
+								</try>
+							</foreach>
+							
+							<!-- Update watermark if any records succeeded -->
+							<choice doc:name="Check Any Success">
+								<when expression="#[vars.syncMetrics.recordsSuccess > 0]">
+									<set-variable variableName="currentWatermark" value="#[vars.newWatermark]" doc:name="Set New Watermark"/>
+									<flow-ref doc:name="Persist Watermark" name="persist-watermark-subflow"/>
+								</when>
+								<otherwise>
+									<logger level="WARN" doc:name="Log No Watermark Update" 
+										message="#['[' ++ correlationId ++ '] No successful records - watermark not updated']"/>
+								</otherwise>
+							</choice>
+						</otherwise>
+					</choice>
+				</when>
+				<otherwise>
+					<logger level="INFO" doc:name="Log No Records" 
+						message="#['[' ++ correlationId ++ '] No new records to sync since watermark: ' ++ (vars.currentWatermark as String default 'N/A')]"/>
+				</otherwise>
+			</choice>
+
+			<!-- Step 5: Release Distributed Lock -->
+			<choice doc:name="Check Distributed Lock Feature for Release">
+				<when expression="#[p('features.distributedLock') == 'true']">
+					<flow-ref doc:name="Release Lock" name="release-distributed-lock-subflow"/>
+				</when>
+				<otherwise>
+					<logger level="DEBUG" doc:name="Skip Lock Release" message="#['[' ++ correlationId ++ '] Distributed lock feature disabled - no lock to release']"/>
+				</otherwise>
+			</choice>
+
+			<!-- Error Handler for Main Orchestration -->
+			<error-handler ref="Scheduler_Error_Handler"/>
+		</try>
+
+		<!-- Log Execution Complete -->
+		<ee:transform doc:name="Calculate Execution Duration">
+			<ee:variables>
+				<ee:set-variable variableName="executionDuration"><![CDATA[%dw 2.0
+output application/java
+---
+(now() - vars.executionStartTime) as Number {unit: "milliseconds"}]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+
+		<logger level="INFO" doc:name="Log Execution Complete" 
+			message="#['[' ++ correlationId ++ '] MySQL-SAP Sync completed. ExecutionId: ' ++ vars.executionId ++ ', Duration: ' ++ vars.executionDuration ++ 'ms, RecordsRead: ' ++ vars.syncMetrics.recordsRead ++ ', Success: ' ++ vars.syncMetrics.recordsSuccess ++ ', Failed: ' ++ vars.syncMetrics.recordsFailure]"/>
+
+	</flow>
+
+</mule>

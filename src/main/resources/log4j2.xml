@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Configuration status="WARN">
+
+    <!-- 
+        MySQL to SAP Incremental Sync - Log4j2 Configuration
+        Provides structured logging with correlation ID tracking.
+        Compatible with Anypoint Monitoring and CloudHub.
+    -->
+
+    <Properties>
+        <Property name="LOG_PATTERN">%-5p %d{yyyy-MM-dd HH:mm:ss.SSS} [%t] [correlationId: %X{correlationId}] [processor: %X{processorPath}] %c{1}: %m%n</Property>
+        <Property name="LOG_FILE_NAME">mysql-sap-sync</Property>
+    </Properties>
+
+    <Appenders>
+        <!-- Rolling File Appender for Application Logs -->
+        <RollingFile name="file" 
+            fileName="${sys:mule.home}${sys:file.separator}logs${sys:file.separator}${LOG_FILE_NAME}.log"
+            filePattern="${sys:mule.home}${sys:file.separator}logs${sys:file.separator}${LOG_FILE_NAME}-%d{yyyy-MM-dd}-%i.log">
+            <PatternLayout pattern="${LOG_PATTERN}"/>
+            <Policies>
+                <SizeBasedTriggeringPolicy size="50 MB"/>
+                <TimeBasedTriggeringPolicy interval="1" modulate="true"/>
+            </Policies>
+            <DefaultRolloverStrategy max="30"/>
+        </RollingFile>
+
+        <!-- Console Appender for Development and CloudHub -->
+        <Console name="Console" target="SYSTEM_OUT">
+            <PatternLayout pattern="${LOG_PATTERN}"/>
+        </Console>
+
+        <!-- Error Log File - Separate file for errors only -->
+        <RollingFile name="errorFile" 
+            fileName="${sys:mule.home}${sys:file.separator}logs${sys:file.separator}${LOG_FILE_NAME}-error.log"
+            filePattern="${sys:mule.home}${sys:file.separator}logs${sys:file.separator}${LOG_FILE_NAME}-error-%d{yyyy-MM-dd}-%i.log">
+            <PatternLayout pattern="${LOG_PATTERN}"/>
+            <Policies>
+                <SizeBasedTriggeringPolicy size="50 MB"/>
+                <TimeBasedTriggeringPolicy interval="1" modulate="true"/>
+            </Policies>
+            <DefaultRolloverStrategy max="30"/>
+            <ThresholdFilter level="ERROR" onMatch="ACCEPT" onMismatch="DENY"/>
+        </RollingFile>
+    </Appenders>
+
+    <Loggers>
+        <!-- Application Logger - Main application logs -->
+        <AsyncLogger name="org.mule.runtime.core.internal.processor.LoggerMessageProcessor" level="INFO" additivity="false">
+            <AppenderRef ref="file"/>
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="errorFile"/>
+        </AsyncLogger>
+
+        <!-- Database Connector Logger -->
+        <AsyncLogger name="org.mule.extension.db" level="WARN" additivity="false">
+            <AppenderRef ref="file"/>
+            <AppenderRef ref="Console"/>
+        </AsyncLogger>
+
+        <!-- SAP Connector Logger -->
+        <AsyncLogger name="com.mulesoft.connector.sap" level="WARN" additivity="false">
+            <AppenderRef ref="file"/>
+            <AppenderRef ref="Console"/>
+        </AsyncLogger>
+
+        <!-- Object Store Logger -->
+        <AsyncLogger name="org.mule.extension.objectstore" level="WARN" additivity="false">
+            <AppenderRef ref="file"/>
+            <AppenderRef ref="Console"/>
+        </AsyncLogger>
+
+        <!-- Batch Processing Logger -->
+        <AsyncLogger name="org.mule.runtime.module.extension.internal.runtime.source.poll" level="WARN" additivity="false">
+            <AppenderRef ref="file"/>
+            <AppenderRef ref="Console"/>
+        </AsyncLogger>
+
+        <!-- HTTP Logger - Suppress unless debugging -->
+        <AsyncLogger name="org.mule.service.http" level="WARN"/>
+        <AsyncLogger name="org.mule.extension.http" level="WARN"/>
+
+        <!-- Suppress noisy loggers -->
+        <AsyncLogger name="org.apache.cxf" level="WARN"/>
+        <AsyncLogger name="org.apache.http" level="WARN"/>
+        <AsyncLogger name="org.springframework" level="WARN"/>
+        <AsyncLogger name="org.mule.runtime.core.internal.policy" level="WARN"/>
+
+        <!-- Root Logger -->
+        <AsyncRoot level="INFO">
+            <AppenderRef ref="file"/>
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="errorFile"/>
+        </AsyncRoot>
+    </Loggers>
+
+</Configuration>

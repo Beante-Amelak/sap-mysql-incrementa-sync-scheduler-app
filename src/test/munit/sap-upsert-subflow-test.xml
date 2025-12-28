@@ -1,0 +1,267 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+	xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xsi:schemaLocation="
+		http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+		http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+		http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd
+		http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+	<munit:config name="sap-upsert-subflow-test-suite" doc:name="MUnit Configuration"/>
+
+	<!-- Test: SAP Upsert Success -->
+	<munit:test name="sap-upsert-success-test" 
+		doc:name="Test SAP Upsert Success" 
+		description="Verifies SAP upsert processes successful response correctly">
+		
+		<munit:behavior>
+			<!-- Mock SAP RFC Call - Success Response -->
+			<munit-tools:mock-when processor="sap:synchronous-remote-function-call">
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[{
+						'BAPI_SALESORDER_CREATEFROMDAT2': {
+							'export': {
+								'SALESDOCUMENT': '0000012345'
+							},
+							'tables': {
+								'RETURN': {
+									'row': [{
+										'TYPE': 'S',
+										'NUMBER': '000',
+										'MESSAGE': 'Sales order 0000012345 created successfully'
+									}]
+								}
+							}
+						}
+					}]"/>
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+
+			<munit:set-event doc:name="Set SAP Request">
+				<munit:payload value="#[read('&lt;BAPI_SALESORDER_CREATEFROMDAT2&gt;&lt;import&gt;&lt;ORDER_HEADER_IN&gt;&lt;DOC_TYPE&gt;TA&lt;/DOC_TYPE&gt;&lt;/ORDER_HEADER_IN&gt;&lt;/import&gt;&lt;/BAPI_SALESORDER_CREATEFROMDAT2&gt;', 'application/xml')]"/>
+				<munit:variables>
+					<munit:variable key="currentRecordId" value="#[1]"/>
+					<munit:variable key="sapRequestType" value="#['BAPI']"/>
+				</munit:variables>
+			</munit:set-event>
+		</munit:behavior>
+
+		<munit:execution>
+			<flow-ref doc:name="Execute SAP Upsert" name="sap-upsert-subflow"/>
+		</munit:execution>
+
+		<munit:validation>
+			<munit-tools:assert-that 
+				expression="#[payload.success]" 
+				is="#[MunitTools::equalTo(true)]"
+				message="SAP upsert should be successful"/>
+			<munit-tools:assert-that 
+				expression="#[payload.salesDocument]" 
+				is="#[MunitTools::equalTo('0000012345')]"
+				message="Sales document number should be returned"/>
+		</munit:validation>
+	</munit:test>
+
+	<!-- Test: SAP Upsert with Error Response -->
+	<munit:test name="sap-upsert-error-response-test" 
+		doc:name="Test SAP Upsert Error Response" 
+		description="Verifies SAP upsert handles error response correctly"
+		expectedErrorType="APP:SAP_UPSERT_FAILED">
+		
+		<munit:behavior>
+			<!-- Mock SAP RFC Call - Error Response -->
+			<munit-tools:mock-when processor="sap:synchronous-remote-function-call">
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[{
+						'BAPI_SALESORDER_CREATEFROMDAT2': {
+							'export': {
+								'SALESDOCUMENT': ''
+							},
+							'tables': {
+								'RETURN': {
+									'row': [{
+										'TYPE': 'E',
+										'NUMBER': '001',
+										'MESSAGE': 'Customer CUST001 does not exist'
+									}]
+								}
+							}
+						}
+					}]"/>
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+
+			<munit:set-event doc:name="Set SAP Request">
+				<munit:payload value="#[read('&lt;BAPI_SALESORDER_CREATEFROMDAT2&gt;&lt;import&gt;&lt;ORDER_HEADER_IN&gt;&lt;DOC_TYPE&gt;TA&lt;/DOC_TYPE&gt;&lt;/ORDER_HEADER_IN&gt;&lt;/import&gt;&lt;/BAPI_SALESORDER_CREATEFROMDAT2&gt;', 'application/xml')]"/>
+				<munit:variables>
+					<munit:variable key="currentRecordId" value="#[1]"/>
+					<munit:variable key="sapRequestType" value="#['BAPI']"/>
+				</munit:variables>
+			</munit:set-event>
+		</munit:behavior>
+
+		<munit:execution>
+			<flow-ref doc:name="Execute SAP Upsert" name="sap-upsert-subflow"/>
+		</munit:execution>
+	</munit:test>
+
+	<!-- Test: SAP Upsert with Warning Response (Should Succeed) -->
+	<munit:test name="sap-upsert-warning-response-test" 
+		doc:name="Test SAP Upsert Warning Response" 
+		description="Verifies SAP upsert treats warnings as success">
+		
+		<munit:behavior>
+			<!-- Mock SAP RFC Call - Warning Response -->
+			<munit-tools:mock-when processor="sap:synchronous-remote-function-call">
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[{
+						'BAPI_SALESORDER_CREATEFROMDAT2': {
+							'export': {
+								'SALESDOCUMENT': '0000012346'
+							},
+							'tables': {
+								'RETURN': {
+									'row': [
+										{
+											'TYPE': 'W',
+											'NUMBER': '100',
+											'MESSAGE': 'Credit limit exceeded - order created with block'
+										},
+										{
+											'TYPE': 'S',
+											'NUMBER': '000',
+											'MESSAGE': 'Sales order 0000012346 created'
+										}
+									]
+								}
+							}
+						}
+					}]"/>
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+
+			<munit:set-event doc:name="Set SAP Request">
+				<munit:payload value="#[read('&lt;BAPI_SALESORDER_CREATEFROMDAT2&gt;&lt;import&gt;&lt;ORDER_HEADER_IN&gt;&lt;DOC_TYPE&gt;TA&lt;/DOC_TYPE&gt;&lt;/ORDER_HEADER_IN&gt;&lt;/import&gt;&lt;/BAPI_SALESORDER_CREATEFROMDAT2&gt;', 'application/xml')]"/>
+				<munit:variables>
+					<munit:variable key="currentRecordId" value="#[2]"/>
+					<munit:variable key="sapRequestType" value="#['BAPI']"/>
+				</munit:variables>
+			</munit:set-event>
+		</munit:behavior>
+
+		<munit:execution>
+			<flow-ref doc:name="Execute SAP Upsert" name="sap-upsert-subflow"/>
+		</munit:execution>
+
+		<munit:validation>
+			<munit-tools:assert-that 
+				expression="#[payload.success]" 
+				is="#[MunitTools::equalTo(true)]"
+				message="SAP upsert with warnings should be successful"/>
+			<munit-tools:assert-that 
+				expression="#[sizeOf(payload.messages)]" 
+				is="#[MunitTools::equalTo(2)]"
+				message="Should have 2 messages (warning and success)"/>
+		</munit:validation>
+	</munit:test>
+
+	<!-- Test: SAP IDoc Send -->
+	<munit:test name="sap-idoc-send-test" 
+		doc:name="Test SAP IDoc Send" 
+		description="Verifies SAP IDoc send operation">
+		
+		<munit:behavior>
+			<!-- Mock SAP Send IDoc -->
+			<munit-tools:mock-when processor="sap:send">
+				<munit-tools:then-return>
+					<munit-tools:payload value="#[{
+						'ORDERS05': {
+							'IDOC': {
+								'EDI_DC40': {
+									'DOCNUM': '0000000001234567'
+								}
+							}
+						}
+					}]"/>
+				</munit-tools:then-return>
+			</munit-tools:mock-when>
+
+			<munit:set-event doc:name="Set IDoc Request">
+				<munit:payload value="#[read('&lt;ORDERS05&gt;&lt;IDOC&gt;&lt;EDI_DC40&gt;&lt;TABNAM&gt;EDI_DC40&lt;/TABNAM&gt;&lt;/EDI_DC40&gt;&lt;/IDOC&gt;&lt;/ORDERS05&gt;', 'application/xml')]"/>
+				<munit:variables>
+					<munit:variable key="currentRecordId" value="#[3]"/>
+					<munit:variable key="sapRequestType" value="#['IDOC']"/>
+				</munit:variables>
+			</munit:set-event>
+		</munit:behavior>
+
+		<munit:execution>
+			<flow-ref doc:name="Execute SAP Upsert" name="sap-upsert-subflow"/>
+		</munit:execution>
+
+		<munit:validation>
+			<munit-tools:assert-that 
+				expression="#[payload]" 
+				is="#[MunitTools::notNullValue()]"
+				message="IDoc response should not be null"/>
+		</munit:validation>
+	</munit:test>
+
+	<!-- Test: Transformation Subflow -->
+	<munit:test name="transformation-subflow-test" 
+		doc:name="Test Transformation Subflow" 
+		description="Verifies MySQL record transformation to SAP BAPI format">
+		
+		<munit:behavior>
+			<munit:set-event doc:name="Set MySQL Record">
+				<munit:payload value="#[{
+					'id': 1,
+					'orderNumber': 'ORD-001',
+					'customerId': 'CUST001',
+					'customerName': 'Test Customer',
+					'materialNumber': 'MAT001',
+					'materialDescription': 'Test Material',
+					'quantity': 10,
+					'unitOfMeasure': 'EA',
+					'unitPrice': 100.00,
+					'totalAmount': 1000.00,
+					'currency': 'USD',
+					'orderDate': now() as Date,
+					'deliveryDate': (now() + |P7D|) as Date,
+					'plantCode': '1000',
+					'storageLocation': '0001',
+					'salesOrganization': '1000',
+					'distributionChannel': '10',
+					'division': '00',
+					'status': 'NEW',
+					'createdAt': now(),
+					'updated_at': now()
+				}]"/>
+			</munit:set-event>
+		</munit:behavior>
+
+		<munit:execution>
+			<flow-ref doc:name="Execute Transformation" name="transformation-subflow"/>
+		</munit:execution>
+
+		<munit:validation>
+			<munit-tools:assert-that 
+				expression="#[payload.BAPI_SALESORDER_CREATEFROMDAT2 != null]" 
+				is="#[MunitTools::equalTo(true)]"
+				message="Transformed payload should contain BAPI structure"/>
+			<munit-tools:assert-that 
+				expression="#[vars.sapRequestType]" 
+				is="#[MunitTools::equalTo('BAPI')]"
+				message="Request type should be BAPI"/>
+			<munit-tools:assert-that 
+				expression="#[vars.currentRecordId]" 
+				is="#[MunitTools::equalTo(1)]"
+				message="Current record ID should be stored"/>
+		</munit:validation>
+	</munit:test>
+
+</mule>

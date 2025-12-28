@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:db="http://www.mulesoft.org/schema/mule/db"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xsi:schemaLocation="
+		http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+		http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+		http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+	<!-- 
+		MySQL Fetch Subflow
+		Fetches incremental records from MySQL based on watermark timestamp.
+		Uses parameterized queries to prevent SQL injection.
+		Supports configurable fetch size and batch processing.
+	-->
+
+	<sub-flow name="mysql-fetch-incremental-subflow" doc:name="MySQL Fetch Incremental Subflow">
+		<logger level="DEBUG" doc:name="Log Fetch Start" 
+			message="#['[' ++ correlationId ++ '] Starting MySQL fetch. Watermark: ' ++ (vars.currentWatermark as String default 'N/A') ++ ', FetchSize: ' ++ p('sync.fetchSize')]"/>
+
+		<!-- Fetch records updated after the watermark timestamp -->
+		<db:select doc:name="Select Incremental Records" 
+			config-ref="MySQL_Database_Config" 
+			fetchSize="${sync.fetchSize}">
+			<db:sql><![CDATA[SELECT 
+    id,
+    order_number,
+    customer_id,
+    customer_name,
+    material_number,
+    material_description,
+    quantity,
+    unit_of_measure,
+    unit_price,
+    total_amount,
+    currency,
+    order_date,
+    delivery_date,
+    plant_code,
+    storage_location,
+    sales_organization,
+    distribution_channel,
+    division,
+    status,
+    created_at,
+    updated_at
+FROM orders
+WHERE updated_at > :watermark
+ORDER BY updated_at ASC
+LIMIT :fetchLimit]]></db:sql>
+			<db:input-parameters><![CDATA[#[{
+	'watermark': vars.currentWatermark,
+	'fetchLimit': p('sync.fetchSize') as Number
+}]]]></db:input-parameters>
+		</db:select>
+
+		<!-- Materialize the result set to allow multiple iterations -->
+		<ee:transform doc:name="Materialize Results">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+---
+payload map (record) -> {
+	id: record.id,
+	orderNumber: record.order_number,
+	customerId: record.customer_id,
+	customerName: record.customer_name,
+	materialNumber: record.material_number,
+	materialDescription: record.material_description,
+	quantity: record.quantity,
+	unitOfMeasure: record.unit_of_measure,
+	unitPrice: record.unit_price,
+	totalAmount: record.total_amount,
+	currency: record.currency,
+	orderDate: record.order_date,
+	deliveryDate: record.delivery_date,
+	plantCode: record.plant_code,
+	storageLocation: record.storage_location,
+	salesOrganization: record.sales_organization,
+	distributionChannel: record.distribution_channel,
+	division: record.division,
+	status: record.status,
+	createdAt: record.created_at,
+	updated_at: record.updated_at
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+
+		<logger level="DEBUG" doc:name="Log Fetch Complete" 
+			message="#['[' ++ correlationId ++ '] MySQL fetch complete. Records retrieved: ' ++ sizeOf(payload default [])]"/>
+	</sub-flow>
+
+	<!-- 
+		MySQL Health Check Subflow
+		Used to verify database connectivity before main processing.
+	-->
+	<sub-flow name="mysql-health-check-subflow" doc:name="MySQL Health Check Subflow">
+		<db:select doc:name="Health Check Query" config-ref="MySQL_Database_Config">
+			<db:sql><![CDATA[SELECT 1 AS health_check]]></db:sql>
+		</db:select>
+		
+		<logger level="DEBUG" doc:name="Log Health Check" 
+			message="#['[' ++ correlationId ++ '] MySQL health check successful']"/>
+	</sub-flow>
+
+</mule>

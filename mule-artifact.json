@@ -1,0 +1,5 @@
+{
+  "minMuleVersion": "4.9.3",
+  "javaSpecificationVersions": ["17"],
+  "secureProperties": ["db.user", "db.password", "sap.user", "sap.password", "encryption.key"]
+}

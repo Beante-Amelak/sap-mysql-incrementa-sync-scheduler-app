@@ -1,0 +1,17 @@
+# MySQL to SAP Incremental Sync - Secure Configuration
+# All sensitive credentials - values must be encrypted using Secure Properties Tool
+# Format: ![encrypted_value]
+
+# MySQL Credentials
+db:
+  user: "![encrypted_mysql_user]"
+  password: "![encrypted_mysql_password]"
+
+# SAP Credentials
+sap:
+  user: "![encrypted_sap_user]"
+  password: "![encrypted_sap_password]"
+
+# Encryption Key (for reference - actual key passed via VM arg)
+# encryption:
+#   key: "passed_via_vm_arg"
